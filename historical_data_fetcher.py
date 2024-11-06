@@ -45,3 +45,4 @@ def validate_stock_symbol(stock_symbol):
             return True
     except Exception:
         return False
+    

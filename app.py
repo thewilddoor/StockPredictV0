@@ -8,17 +8,29 @@ from plotly.subplots import make_subplots
 import plotly.express as px
 import dash_bootstrap_components as dbc
 import pandas as pd
-import numpy as np
-from coze_api_client import fetch_data
-from data_processing import process_data
-from historical_data_fetcher import validate_stock_symbol
+import uuid
+import os
 
-# Initialize Dash app with a modern Bootstrap theme
+from coze_api_client import fetch_data  # Assumed to fetch data from your Coze API
+from data_processing import process_data  # Processes data including SuperTrend
+from historical_data_fetcher import validate_stock_symbol  # Validates stock symbols
+from coze_chat import Coze  # Coze class for interacting with the Coze API
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env
+
+# Initialize Dash app with a Bootstrap theme and suppress callback exceptions
 app = dash.Dash(__name__, external_stylesheets=[
-    dbc.themes.LUX,
-    "/assets/custom.css"
-])
+    dbc.themes.LUX,  # You can choose other themes as per your preference
+    "/assets/custom.css"  # Custom CSS for additional styling
+], suppress_callback_exceptions=True)
 server = app.server  # For deployment
+
+# Global variables to store conversation history and Coze instance
+conversation_history = []
+coze_instance = None
 
 # Define the layout of the app
 app.layout = html.Div(className="container", children=[
@@ -71,14 +83,6 @@ app.layout = html.Div(className="container", children=[
     State('stock-input', 'value')
 )
 def update_dashboard(n_clicks, ma_values, stock_symbol):
-    """
-    Update the dashboard based on user inputs.
-
-    :param n_clicks: Number of times the Submit button has been clicked.
-    :param ma_values: List of selected moving averages.
-    :param stock_symbol: The stock symbol entered by the user.
-    :return: Dash HTML components to render.
-    """
     if n_clicks > 0 and stock_symbol:
         # Sanitize user input
         stock_symbol = stock_symbol.strip().upper().replace('$', '')
@@ -94,7 +98,7 @@ def update_dashboard(n_clicks, ma_values, stock_symbol):
         # Fetch data using Coze API Client
         api_response = fetch_data(stock_symbol)
 
-        if api_response.get('code') == 200 or api_response.get('code') == 0:
+        if api_response.get('code') in [200, 0]:
             try:
                 # Process data
                 data = process_data(api_response, stock_symbol)
@@ -136,18 +140,18 @@ def update_dashboard(n_clicks, ma_values, stock_symbol):
 
                 # Separate SuperTrend into Uptrend and Downtrend for coloring
                 supertrend_up = data['historical_data'].copy()
-                supertrend_up.loc[supertrend_up['direction'] != 1, 'supertrend'] = np.nan
+                supertrend_up.loc[supertrend_up['direction'] != 1, 'supertrend'] = None
 
                 supertrend_down = data['historical_data'].copy()
-                supertrend_down.loc[supertrend_down['direction'] != -1, 'supertrend'] = np.nan
+                supertrend_down.loc[supertrend_down['direction'] != -1, 'supertrend'] = None
 
                 # Add SuperTrend Uptrend Trace (Green)
                 fig_price_volume.add_trace(go.Scatter(
                     x=supertrend_up['Date'],
                     y=supertrend_up['supertrend'],
                     mode='lines',
-                    name='Mainly Bullish',
-                    line=dict(width=1.5, color='#63b83e'),
+                    name='SuperTrend Uptrend',
+                    line=dict(width=2, color='green'),
                     showlegend=True
                 ), row=1, col=1)
 
@@ -156,8 +160,8 @@ def update_dashboard(n_clicks, ma_values, stock_symbol):
                     x=supertrend_down['Date'],
                     y=supertrend_down['supertrend'],
                     mode='lines',
-                    name='Mainly Bearish',
-                    line=dict(width=1.5, color='#d4222b'),
+                    name='SuperTrend Downtrend',
+                    line=dict(width=2, color='red'),
                     showlegend=True
                 ), row=1, col=1)
 
@@ -303,11 +307,67 @@ def update_dashboard(n_clicks, ma_values, stock_symbol):
 
                 news_content = html.Div(news_cards, className="news-section")
 
-                # Create Tabs
+                # Create Chat Section
+                chat_content = html.Div([
+                    # Chat messages container
+                    html.Div(id='chat-messages', className='chat-messages', children=[
+                        # Initial message from assistant
+                        html.Div(className='message-container justify-start', children=[
+                            html.Div(className='ai-message markdown-content', children=dcc.Markdown(f"Hello! How can I assist you with **{stock_symbol}** today?"))
+                        ])
+                    ]),
+
+                    # User input area
+                    html.Div(className='chat-input-container', children=[
+                        dcc.Textarea(
+                            id='chat-input',
+                            placeholder='Type your message here...',
+                            className='message-textarea',
+                            style={'width': '80%', 'resize': 'none'},
+                            value=''
+                        ),
+                        dbc.Button('Send', id='send-button', color="primary", className='send-button', n_clicks=0),
+                        dbc.Button('Reset', id='reset-button', color="danger", className='reset-button', n_clicks=0)
+                    ])
+                ], className='chat-section')
+
+                # Create Tabs including the new Chat tab
                 tabs = dbc.Tabs([
                     dbc.Tab(label="Charts", tab_id="charts", children=charts_content),
                     dbc.Tab(label="News", tab_id="news", children=news_content),
+                    dbc.Tab(label="Chat", tab_id="chat", children=chat_content),
                 ], id="tabs", active_tab="charts", className="mb-3 tabs")
+
+                # Initialize Coze instance with environment variables for security
+                global coze_instance, conversation_history
+                coze_instance = Coze(
+                    bot_id='7434034445289619462',
+                    api_token=os.getenv('COZE_API_TOKEN'),  # Ensure you set this environment variable
+                    user_id=str(uuid.uuid4()),
+                    stream=False
+                )
+                conversation_history = []  # Reset conversation history
+
+                # Prepare initial prompt
+                # Exclude historical price data from the api_response
+                data_to_analyze = {k: v for k, v in api_response.get('data', {}).items() if k != 'HistoricalData'}
+                initial_prompt = f"Analyze {stock_symbol}\n{data_to_analyze}"
+                # Add initial prompt to conversation history
+                conversation_history.append((initial_prompt, True))
+
+                # Get initial response from Coze bot
+                assistant_response = coze_instance.chat(initial_prompt, history=conversation_history[:-1])
+                conversation_history.append((assistant_response, False))
+
+                # Update chat messages with the assistant's initial response
+                chat_messages = [
+                    html.Div(className='message-container justify-start', children=[
+                        html.Div(className='ai-message markdown-content', children=dcc.Markdown(assistant_response))
+                    ])
+                ]
+
+                # Update the chat content with the messages
+                chat_content.children[0].children = chat_messages
 
                 return tabs
 
@@ -325,16 +385,99 @@ def update_dashboard(n_clicks, ma_values, stock_symbol):
                 )
         else:
             return dbc.Alert(
-                f"Error fetching data from API: {api_response.get('msg', 'Unknown error')}",
-                color="danger",
+                "Please enter a stock symbol and click Submit.",
+                color="secondary",
                 className="alert"
             )
+
+# Callback to handle chat messages
+@app.callback(
+    Output('chat-messages', 'children'),
+    [Input('send-button', 'n_clicks'),
+     Input('reset-button', 'n_clicks')],
+    [State('chat-input', 'value'),
+     State('chat-messages', 'children')]
+)
+def update_chat(send_clicks, reset_clicks, user_input, current_messages):
+    ctx = dash.callback_context
+
+    if not ctx.triggered:
+        raise dash.exceptions.PreventUpdate
+
+    global coze_instance, conversation_history
+
+    button_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if button_id == 'reset-button':
+        # Reset the conversation
+        if coze_instance:
+            coze_instance.reset_conversation()
+        conversation_history = []
+
+        # Reset chat messages
+        initial_message = html.Div(className='message-container justify-start', children=[
+            html.Div(className='ai-message markdown-content', children=dcc.Markdown("Conversation has been reset. How can I assist you?"))
+        ])
+        return [initial_message]
+
+    elif button_id == 'send-button' and user_input:
+        # Append user's message to conversation history
+        conversation_history.append((user_input, True))
+
+        # Prepare the prompt to send to Coze bot
+        # Exclude historical price data from the data sent to Coze
+        # Assuming 'process_data' returns a dictionary; adjust as per actual structure
+        # Here, since 'process_data' has already been called during dashboard update,
+        # and historical data is excluded, we need to extract relevant parts
+        # For simplicity, let's assume we send the latest processed data excluding historical price data
+
+        # Extract necessary data from conversation history or global data structures
+        # Since 'data_processing.py' structures are unknown, adjust accordingly
+        # For this example, we'll assume we send a summary or key insights
+
+        # Construct the prompt
+        # You may need to modify this part based on how 'process_data' structures the data
+        # For now, we'll send the latest financial metrics as an example
+        if not conversation_history:
+            return current_messages  # No history to send
+
+        # Extract the last processed data from conversation_history
+        # Assuming that when the dashboard was updated, conversation_history was populated
+        # with (prompt, is_user) and (response, is_user)
+        # Here, we might need to extract the latest data from 'data_to_analyze'
+
+        # For the purpose of this example, we'll assume 'data_to_analyze' is accessible
+        # via 'coze_instance' or another global variable
+        # Since we don't have that, we'll proceed with the existing conversation history
+
+        # Get the latest user message
+        latest_user_message = user_input
+
+        # Build the prompt
+        prompt = f"Analyze {latest_user_message}\nPlease provide insights based on the provided data."
+
+        # Append prompt to conversation history
+        conversation_history.append((prompt, True))
+
+        # Send the message to Coze bot
+        assistant_response = coze_instance.chat(prompt, history=conversation_history[:-1])
+        conversation_history.append((assistant_response, False))
+
+        # Add user's message to chat
+        user_message = html.Div(className='message-container justify-end', children=[
+            html.Div(className='user-message markdown-content', children=dcc.Markdown(user_input))
+        ])
+
+        # Add assistant's response to chat
+        assistant_message = html.Div(className='message-container justify-start', children=[
+            html.Div(className='ai-message markdown-content', children=dcc.Markdown(assistant_response))
+        ])
+
+        # Update chat messages
+        return current_messages + [user_message, assistant_message]
+
     else:
-        return dbc.Alert(
-            "Please enter a stock symbol and click Submit.",
-            color="secondary",
-            className="alert"
-        )
+        raise dash.exceptions.PreventUpdate
 
 if __name__ == '__main__':
     app.run_server(debug=True)

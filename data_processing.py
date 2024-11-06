@@ -121,7 +121,7 @@ def process_data(api_response, stock_symbol):
     })
 
     # Calculate SuperTrend
-    supertrend_data = calculate_supertrend(df.reset_index(), atr_period=4, factor=2.94, reset_period=31)
+    supertrend_data = calculate_supertrend(df.reset_index(), atr_period=4, factor=2.94, reset_period=30)
 
     # Merge SuperTrend data into df
     df = df.reset_index().merge(supertrend_data[['Date', 'supertrend', 'direction']], on='Date', how='left')
