@@ -17,6 +17,8 @@ class HistoricalDataFetcher:
         """
         ticker = yf.Ticker(self.stock_symbol)
         self.data = ticker.history(period=period, interval=interval)
+        if self.data.empty:
+            raise ValueError("No historical data found for this stock.")
         self.data.reset_index(inplace=True)
         self.data.rename(columns={
             'Open': 'Open',
@@ -30,10 +32,16 @@ class HistoricalDataFetcher:
 
 def validate_stock_symbol(stock_symbol):
     """
-    Validates if the stock symbol exists by attempting to fetch its info.
+    Validates if the stock symbol exists by attempting to fetch its historical data.
     :param stock_symbol: The stock symbol to validate.
     :return: True if valid, False otherwise.
     """
     ticker = yf.Ticker(stock_symbol)
-    info = ticker.info
-    return info and 'regularMarketPrice' in info
+    try:
+        data = ticker.history(period='1d')
+        if data.empty:
+            return False
+        else:
+            return True
+    except Exception:
+        return False

@@ -12,7 +12,7 @@ def process_data(api_response, stock_symbol):
     # Fetch historical data using HistoricalDataFetcher
     fetcher = HistoricalDataFetcher(stock_symbol)
     try:
-        df = fetcher.fetch_data(period='120d', interval='1d')
+        df = fetcher.fetch_data(period='6mo', interval='1d')
         if df.empty:
             raise ValueError("No historical data found for this stock.")
     except Exception as e:
