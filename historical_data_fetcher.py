@@ -8,7 +8,7 @@ class HistoricalDataFetcher:
         self.stock_symbol = stock_symbol.upper()
         self.data = None
 
-    def fetch_data(self, period='6mo', interval='1d'):
+    def fetch_data(self, period='1y', interval='1d'):
         """
         Fetch historical data for the stock symbol.
         :param period: The period to fetch data for (e.g., '120d' for 120 days).
